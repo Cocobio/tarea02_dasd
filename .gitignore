@@ -1,0 +1,49 @@
+# --- Vivado Temporary and Log Files ---
+*.log
+*.jou
+*.pb
+*.str
+*.debug
+*.dir
+*.prm
+*.tmp
+*.vds
+*.vdi
+*.os
+*.js
+
+# --- Vivado Project Directories (Auto-generated) ---
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.data/
+.Xil/
+
+# --- SDK/Vitis Directories ---
+*.sdk/
+.metadata/
+RemoteResourcesCache/
+
+# --- Reports and Exported Files ---
+*.rpt
+*.rpx
+*.dcp
+*.hwdef
+*.sysdef
+*.bit
+*.bin
+*.ltx
+*.zip
+
+# --- Files that should be versioned ---
+# !*.xpr
+# !*.srcs/
+# !*.xdc
+# !*.v
+# !*.vhd
+# !*.sv
+
+# --- Nvim session files ---
+Session.vim
