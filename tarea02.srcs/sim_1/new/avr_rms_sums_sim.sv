@@ -1,11 +1,11 @@
 `timescale 1ns / 1ps
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // Company:
 // Engineer:
 //
-// Create Date: 05/21/2026 01:43:27 PM
+// Create Date: 05/26/2026 09:36:05 PM
 // Design Name:
-// Module Name: processing_thread
+// Module Name: avr_rms_sums_sim
 // Project Name:
 // Target Devices:
 // Tool Versions:
@@ -17,22 +17,15 @@
 // Revision 0.01 - File Created
 // Additional Comments:
 //
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 
-module processing_thread (
-    input logic start,
-                clk,
-                rst,
-                data_available,
-    input logic [13:0] data_in,
-    input logic [9:0] N,
-    output logic [13:0] min,
-                        max,
-                        mean,
-                        rms,
-    output logic done
-    );
+module avr_rms_sums_sim();
+    logic start, clk, rst, data_available;
+    logic [13:0] data_in;
+    logic [9:0] N;
+    logic [13:0] mean, rms;
+    logic done;
 
     // Control state machine logic
     typedef enum {
@@ -62,7 +55,7 @@ module processing_thread (
         NEWTON_1: next_state = NEWTON_2;
         NEWTON_2: next_state = NEWTON_3;
         NEWTON_3: next_state = NEWTON_4;
-        NEWTON_4: next_state = newton_guess == newton_next_guess ? NEWTON_D : NEWTON_1;
+        NEWTON_4: next_state = NEWTON_D;
         NEWTON_D: next_state = DONE;
         DONE: next_state = IDLE;
         endcase
@@ -91,40 +84,6 @@ module processing_thread (
             data_counter <= data_counter + 1;
     end
     ///////////////////////////////////////////////////////////////////////////
-
-    // Min and Max
-    logic [13:0] minimum, maximum;
-    logic [13:0] cmp_0, cmp_1;
-    logic cmp_res;
-
-    // Tie logic to control state machine state
-    always_comb begin
-        cmp_0 = '0;
-        cmp_1 = '0;
-
-        if (current_state == PRO_1) begin
-            cmp_0 = data_in_held;
-            cmp_1 = minimum;
-        end else if (current_state == PRO_2) begin
-            cmp_0 = ~data_in_held;
-            cmp_1 = ~maximum;
-        end
-
-        cmp_res = cmp_0 < cmp_1;
-    end
-
-    always_ff @(posedge clk) begin
-        if (rst || current_state == SETUP) begin
-            minimum <= '1;
-            maximum <= '0;
-        end else if (current_state == PRO_1 && cmp_res) begin
-            minimum <= data_in_held;
-        end else if (current_state == PRO_2 && cmp_res) begin
-            maximum <= data_in_held;
-        end
-    end
-    ///////////////////////////////////////////////////////////////////////////
-
     // Mean and RMS
     logic [23:0] mean;
     logic [25:0] rms;
@@ -243,4 +202,28 @@ module processing_thread (
         end
     end
     ///////////////////////////////////////////////////////////////////////////
+    // Simulation
+    initial begin
+        clk = 0;
+        forever #1 clk = ~clk;
+    end
+
+    localparam n = 7;
+    logic [13:0] mem[100];
+    initial $readmemh("100_shuffle_increasing_data.mem", mem);
+
+    initial begin
+        #3 rst = 1;
+        #2 rst = 0;
+
+        #4 N = n;
+        #1 start = 1;
+        #2 start = 0;
+        #2 N = 0;
+
+        for (int i = 0; i < n + 8; i = i + 1) begin
+            #16 data_available = 1; data_in = mem[i];
+            #2 data_available = 0; data_in = 0;
+        end
+    end
 endmodule
