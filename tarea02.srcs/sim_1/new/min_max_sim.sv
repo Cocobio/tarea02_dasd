@@ -37,7 +37,7 @@ module min_max_sim();
         DONE } state_e;
 
     logic [13:0] data_in_held;
-    logic [10:0] data_counter, data_range;
+    logic [9:0] data_counter, data_range;
     state_e current_state, next_state;
 
     always_comb begin
@@ -78,10 +78,10 @@ module min_max_sim();
             data_counter <= '0;
         end else if (current_state == SETUP) begin
             // @todo check if it should be 7 or 8
-            if (N < 1016) data_range <= N + 8;
-            else data_range <= 1024;
+            if (N < 1016) data_range <= N + 7;
+            else data_range <= 1023;
             data_counter <= '0;
-        end else if (current_state == PRO_1)
+        end else if (current_state == PRO_2)
             data_counter <= data_counter + 1;
     end
     ///////////////////////////////////////////////////////////////////////////
@@ -136,17 +136,21 @@ module min_max_sim();
         forever #1 clk = ~clk;
     end
 
+    localparam n = 7;
+    logic [13:0] mem[100];
+    initial $readmemh("100_shuffle_increasing_data.mem", mem);
+
     initial begin
         #3 rst = 1;
         #2 rst = 0;
 
-        #4 N = 0;
+        #4 N = n;
         #1 start = 1;
         #2 start = 0;
         #2 N = 0;
 
-        for (int i = 0; i < 8; i = i + 1) begin
-            #16 data_available = 1; data_in = i;
+        for (int i = 0; i < n + 8; i = i + 1) begin
+            #16 data_available = 1; data_in = mem[i];
             #2 data_available = 0; data_in = 0;
         end
     end
