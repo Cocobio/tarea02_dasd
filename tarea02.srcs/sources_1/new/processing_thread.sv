@@ -40,7 +40,7 @@ module processing_thread (
         SETUP,
         PRO_0, PRO_1, PRO_2,
         DIV_1, DIV_2,
-        NEWTON_N, NEWTON_1, NEWTON_2, NEWTON_3, NEWTON_4, NEWTON_D,
+        NEWTON_N, NEWTON_1, NEWTON_2, NEWTON_3, NEWTON_4, NEWTON_F, NEWTON_D,
         DONE } state_e;
 
     logic [13:0] data_in_held;
@@ -58,11 +58,15 @@ module processing_thread (
         PRO_2: next_state = data_counter == data_range ? DIV_1 : PRO_0;
         DIV_1: next_state = DIV_2;
         DIV_2: next_state = NEWTON_N;
-        NEWTON_N: next_state = NEWTON_1;
+        NEWTON_N:
+            next_state = newton_in[23] || newton_in == '0 ? NEWTON_1 : NEWTON_N;
         NEWTON_1: next_state = NEWTON_2;
         NEWTON_2: next_state = NEWTON_3;
         NEWTON_3: next_state = NEWTON_4;
-        NEWTON_4: next_state = newton_guess == newton_next_guess ? NEWTON_D : NEWTON_1;
+        NEWTON_4:
+            if (newton_guess[16:6] == mul_res[40:29]) next_state = NEWTON_F;
+            else next_state = NEWTON_1;
+        NEWTON_F: next_state = NEWTON_D;
         NEWTON_D: next_state = DONE;
         DONE: next_state = IDLE;
         endcase
@@ -126,35 +130,34 @@ module processing_thread (
     ///////////////////////////////////////////////////////////////////////////
 
     // Mean and RMS
-    logic [23:0] internal_mean; //U12.12
-    logic [25:0] internal_rms;  //U14.12
+    logic [23:0] internal_mean_sum; //U12.12
+    logic [37:0] internal_rms_sum;  //U14.24
 
-    // DSP48E1 25x18 signed multiplication (24x17 unsigned)
-    logic [23:0] mul_0;         // 24 bits
-    logic [16:0] mul_1;         // 17 bits
-    logic [40:0] mul_res;       // 41 bits
+    // DSP48E1 25x18 signed multiplication
+    logic [23:0] mul_0;     // 24 bits
+    logic [16:0] mul_1;     // 17 bits
+    logic [40:0] mul_res;   // 41 bits
 
     // Basys 3 up to 48 bits inputs
-    logic [24:0] sum_0;
-    logic [17:0] sum_1;
-    logic [25:0] sum_res;
+    logic [37:0] sum_0;     // 38 bits
+    logic [27:0] sum_1;     // 28 bits
+    logic [37:0] sum_res;   // 38 bits
 
     // sum and mul logic a bit down, to add DIV and NEWTON's logic
     always_ff @(posedge clk) begin
         if (rst || current_state == SETUP) begin
-            internal_mean <= '0;
-            internal_rms <= '0;
+            internal_mean_sum <= '0;
+            internal_rms_sum <= '0;
         end else if (current_state == PRO_1) begin
-            internal_mean <= sum_res[23:0];
+            internal_mean_sum <= sum_res[23:0];
         end else if (current_state == PRO_2) begin
-            internal_rms <= sum_res;
+            internal_rms_sum <= sum_res[37:0];
         end else if (current_state == DIV_1) begin
-            // U12.12 (24 bits) x U0.18 = U12.30 -> U2.12
-            internal_mean <= {'0, mul_res[40:19]};     // @todo check the slices
+            // U12.12 (24 bits) x U0.19 = 2.31 -> U2.10
+            internal_mean_sum <= {'0, mul_res[32:21]};
         end else if (current_state == DIV_2) begin
-            // 4x12 = 14.12 x 0.19
-            // U14.10 (24 bits) x U0.18 = U14.28 leave -> U2.12
-            internal_rms <= {'0, mul_res[40:17]};      // @todo check the slices
+            // U14.10 (24 bits) x U0.19 = 4.29 -> U4.20
+            newton_in <= mul_res[32:9];
         end
     end
 
@@ -165,7 +168,7 @@ module processing_thread (
     localparam DENOM_WIDTH = 16;
     logic [DENOM_WIDTH-1:0] div_lut[1024];
     initial $readmemh("denom_division.mem", div_lut);
-    logic [DENOM_WIDTH:0] denominator;
+    logic [DENOM_WIDTH:0] denominator; // U0.17 -> really a U0.19 (implicit 00)
 
     always_ff @(posedge clk) begin
         if (rst) denominator <= '0;
@@ -175,30 +178,79 @@ module processing_thread (
     ///////////////////////////////////////////////////////////////////////////
 
     // Newton
-    // logic [15:0] guess, next_guess;
-    // logic [5:0] newton_first_guess;
+    logic [16:0] initial_guess_lut[64];
+    initial $readmemh("newton_initial_guess.mem", initial_guess_lut);
+    logic [23:0] newton_in;             // U4.20 -> U0.24
+    logic [4:0] normalized_right_shift;
+    logic denormalized_right_shift;
 
-    // always_comb begin
-    //     newton_first_guess = '0;
-    //     if (current_state == NEWTON_N) begin
-    //         if ('0 == )
-    //     end
-    // end
+    logic left_shift;
+    assign left_shift = normalized_right_shift < 4;
+
+    logic [16:0] newton_guess;      // Using U.1.16 because of dsp limitations
+    logic [23:0] newton_next_guess; // Using 24 bits (U.2.22)
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            newton_in <= '0;
+            normalized_right_shift <= '0;
+            newton_guess <= '0;
+            newton_next_guess <= '0;
+        end else if (current_state == SETUP) begin
+            newton_in <= '0;
+            normalized_right_shift <= '0;
+            newton_guess <= '0;
+            newton_next_guess <= '0;
+        end else if (current_state == NEWTON_N) begin
+            if (!newton_in[23]) begin
+                newton_in <= newton_in << 1;
+                normalized_right_shift <= normalized_right_shift + 1;
+            end else begin
+                denormalized_right_shift <= left_shift;
+                normalized_right_shift <= left_shift ?
+                    4 - normalized_right_shift : normalized_right_shift - 4;
+                newton_guess <= initial_guess_lut[newton_in[22:17]];
+            end
+        end else if (current_state == NEWTON_1) begin
+            // xn^2 -> U1.16 x U1.16 -> U2.32 => U2.22
+            newton_next_guess <= mul_res[33:10];
+        end else if (current_state == NEWTON_2) begin
+            // U2.22->2.15 x U0.24 -> U2.39 => U2.22 // @todo check overload
+            newton_next_guess <= mul_res[40:17];
+        end else if (current_state == NEWTON_3) begin
+            // newton_next_guess <= 24'hc00000 + (~newton_next_guess) + 1;
+            newton_next_guess <= sum_res[23:0];
+        end else if (current_state == NEWTON_4) begin
+            // newton_guess x newton_next_guess
+            // U1.16 x U2.22 -> U3.38 => U2.16 -> U1.16
+            newton_guess <= mul_res[40:23];// >> 1;
+        end else if (current_state == NEWTON_F) begin
+            // U0.24 * U1.16 -> U1.40 => U1.16
+            newton_guess <= mul_res[40:24];
+        end else if (current_state == NEWTON_D) begin
+            // U1.16 x U2.22 -> U3.38 => U2.12
+            // U1.16 x U2.16 -> U3.32 => U2.12
+            newton_guess <= mul_res[33:20];
+        end
+    end
 
     ///////////////////////////////////////////////////////////////////////////
 
     // Sum
+    // sum_0 -> 38 bits
+    // sum_1 -> 28 bits
+    // sum_res -> 38 bits
     always_comb begin
         case (current_state)
         PRO_1: begin
-            sum_0 = {'0, internal_mean};
+            sum_0 = {'0, internal_mean_sum};
             sum_1 = {'0, data_in_held};
         end PRO_2: begin
-            sum_0 = internal_rms;
+            sum_0 = internal_rms_sum;
             sum_1 = {'0, data_in_held_squared};
-        // end NEWTON_4: begin
-        //     sum_0 = {'0, ~newton_next_guess + 1};
-        //     sum_1 = 2'd3;
+        end NEWTON_3: begin
+            sum_0 = {'0, ~newton_next_guess}; // Negative value ~val + 1
+            sum_1 = {'0, 24'hc00001};
         end default: begin
             sum_0 = '0;
             sum_1 = '0;
@@ -207,27 +259,40 @@ module processing_thread (
         sum_res = sum_0 + sum_1;
     end
 
+    localparam SQRT_2 = 17'h16a09;  // U1.16
+    localparam ONE = 17'h10000;     // U1.16
     // Mult
+    // mul_0 -> 24 bits
+    // mul_1 -> 17 bits
     always_comb begin
         case (current_state)
         PRO_1: begin
             mul_0 = {'0, data_in_held};
             mul_1 = {'0, data_in_held};
         end DIV_1: begin
-            mul_0 = {'0, internal_mean};    // U12.12 (24 bits)
-            mul_1 = {'0, denominator};      // U0.18 using only 17 (bits)
+            mul_0 = {'0, internal_mean_sum};    // U12.12 (24 bits)
+            mul_1 = {'0, denominator};          // U0.18 using only 16 (bits)
         end DIV_2: begin
-            mul_0 = internal_rms[25:2];     // U14.12 => U14.10 (24 bits)
-            mul_1 = {'0, denominator};      // U0.18 using only 16 (bits)
-        end NEWTON_1: begin
+            mul_0 = internal_rms_sum[37:14];    // U14.24 => U14.10 (24 bits)
+            mul_1 = {'0, denominator};          // U0.18 using only 16 (bits)
+        end NEWTON_1: begin // xn^2
             mul_0 = {'0, newton_guess};
-            mul_1 = {'0, newton_guess};
-        end NEWTON_2: begin
-            mul_0 = {'0, newton_guess};
-            mul_1 = {'0, newton_target};
-        end NEWTON_4: begin
-            mul_0 = {'0, newton_guess};
-            mul_1 = {'0, newton_next_guess};
+            mul_1 = newton_guess;
+        end NEWTON_2: begin // xn^2 * X
+            mul_0 = newton_in;
+            mul_1 = newton_next_guess[23:7];        // U2.22->2.15
+        end NEWTON_4: begin // xn(3- xn^2 * X)
+            mul_0 = newton_next_guess;
+            mul_1 = newton_guess;
+        end NEWTON_F: begin // xn * X (xn = 1/sqrt(X))
+            mul_0 = newton_in;
+            mul_1 = newton_guess;
+        end NEWTON_D: begin
+            // mul_0 = {'0, newton_guess, 2'b00} >> (normalized_right_shift >> 1);
+            mul_0 = denormalized_right_shift ?
+                {'0, newton_guess} >> (normalized_right_shift >> 1) :
+                {'0, newton_guess} << (normalized_right_shift >> 1) ;
+            mul_1 = (normalized_right_shift & 1) ? SQRT_2: ONE;
         end default: begin
             mul_0 = '0;
             mul_1 = '0;
@@ -236,10 +301,10 @@ module processing_thread (
         mul_res = mul_0 * mul_1;
     end
 
-    logic [15:0] data_in_held_squared;  // U4.12 @todo move to U4.24
+    logic [27:0] data_in_held_squared;  // U2.12^2 => U4.24
     always_ff @(posedge clk) begin
         if (rst) data_in_held_squared <= '0;
-        else if (current_state == PRO_1) data_in_held_squared <= mul_res[27:12];
+        else if (current_state == PRO_1) data_in_held_squared <= mul_res[27:0];
         else data_in_held_squared <= '0;
     end
 
@@ -251,8 +316,8 @@ module processing_thread (
         if (done) begin
             min = minimum;
             max = maximum;
-            mean = internal_mean;
-            rms = internal_rms;
+            mean = internal_mean_sum[11:0];
+            rms = newton_guess[13:0];
         end else begin
             min = '0;
             max = '0;

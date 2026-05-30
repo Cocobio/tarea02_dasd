@@ -33,8 +33,8 @@ def main() -> None:
         print(f"Min: {min}")
         print(f"Max: {max}")
         print(f"Mean: {mean}")
-        print(f"Mean on square: {squared_mean}")
         print(f"RMS: {rms}")
+        # print(f"Mean on square: {squared_mean}")
 
 
 if __name__ == "__main__":
